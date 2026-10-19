@@ -68,6 +68,18 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       "List Agent-owned and user-owned spaces available to reuse or claim.",
   },
   {
+    name: "cleanupTaskSpaces",
+    signature: "await cleanupTaskSpaces({ timeout? })",
+    summary:
+      "Explicit bulk recovery: request native cleanup of non-running Agent-created spaces and return its receipt. The native side skips running spaces. Verify with listTaskSpaces() before reporting deletion; this may remove retained results and never replaces task.finish({ keep: [] }) for the current task.",
+    options: {
+      timeout: option(
+        "positiveMilliseconds",
+        "Optional bound for a known-bad native build; deletion may still be pending after a timeout.",
+      ),
+    },
+  },
+  {
     name: "taskSpace",
     signature: "await taskSpace(nameOrId, { profileId? })",
     summary:

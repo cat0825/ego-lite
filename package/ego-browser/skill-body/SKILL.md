@@ -161,6 +161,18 @@ Do not inspect or select profiles unless the user explicitly requests a
 particular Ego Lite profile. A `profileId` applies only when creating a space;
 use `help("profiles")` for the exact workflow.
 
+If the user explicitly asks for bulk recovery of accumulated Agent spaces, call
+`await cleanupTaskSpaces({ timeout: 30000 })`. This requests the browser's
+native cleanup policy and returns a receipt; the native side skips spaces it
+considers running. The helper does not infer liveness from age, ownership,
+process state, or tab titles. After the call, run `listTaskSpaces()` again and
+report only IDs absent from that fresh inventory as deleted. A returned
+`deletedSpaceIds` entry alone is not proof that the space is gone. If the call
+times out, the deletion may still be pending: verify before retrying. This may
+remove completed results retained for review. It is not automatic startup or
+task-completion cleanup and does not replace `task.finish({ keep: [] })` for the
+current task.
+
 Supported TaskSpace API:
 
 - State: `spaceId`, `name`, `ownership`, `page(label)`, `userPage()`

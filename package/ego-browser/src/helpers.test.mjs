@@ -7,6 +7,7 @@ import { join } from "node:path";
 import * as helperExports from "../dist/src/helpers.js";
 import {
   claimTaskSpace,
+  cleanupTaskSpaces,
   completeTaskSpace,
   handOffTaskSpace,
   newTaskSpace,
@@ -197,6 +198,7 @@ test("taskspace helper surface exposes public helpers including claimTaskSpace",
   assert.equal(typeof context.taskSpace, "function");
   assert.equal(typeof context.profiles, "function");
   assert.equal(typeof context.listTaskSpaces, "function");
+  assert.equal(typeof context.cleanupTaskSpaces, "function");
   assert.equal(typeof context.switchTaskSpace, "function");
   assert.equal(typeof context.newTaskSpace, "function");
   assert.equal(typeof context.useOrCreateTaskSpace, "function");
@@ -209,6 +211,146 @@ test("taskspace helper surface exposes public helpers including claimTaskSpace",
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("cleanupTaskSpaces returns the native cleanup receipt", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async deleteSpaces(options) {
+        calls.push(["deleteSpaces", options]);
+        return {
+          deletedSpaceIds: [3, 7],
+          skippedRunningSpaceIds: [11],
+        };
+      },
+    },
+    async () => {
+      assert.deepEqual(await cleanupTaskSpaces(), {
+        deletedSpaceIds: [3, 7],
+        skippedRunningSpaceIds: [11],
+      });
+    },
+  );
+  assert.deepEqual(calls, [["deleteSpaces", { scope: "task" }]]);
+});
+
+test("cleanupTaskSpaces can bound a known-bad native call", async () => {
+  await withEgo(
+    {
+      deleteSpaces() {
+        return new Promise(() => {});
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces({ timeout: 10 }),
+        /cleanupTaskSpaces timed out after 10ms; deletion may still be pending\. Verify with listTaskSpaces\(\) before retrying\./,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces rejects a non-positive timeout", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return { deletedSpaceIds: [], skippedRunningSpaceIds: [] };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces({ timeout: 0 }),
+        /cleanupTaskSpaces timeout must be a positive number/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces copies native ID arrays", async () => {
+  const result = {
+    deletedSpaceIds: [3],
+    skippedRunningSpaceIds: [11],
+  };
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return result;
+      },
+    },
+    async () => {
+      const cleanup = await cleanupTaskSpaces();
+      cleanup.deletedSpaceIds.push(99);
+      cleanup.skippedRunningSpaceIds.push(98);
+    },
+  );
+  assert.deepEqual(result, {
+    deletedSpaceIds: [3],
+    skippedRunningSpaceIds: [11],
+  });
+});
+
+test("cleanupTaskSpaces propagates native cancellation and errors", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return { error: "The user canceled cleanup" };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces(),
+        /cleanupTaskSpaces: The user canceled cleanup/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces rejects malformed native results", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return {
+          deletedSpaceIds: [3, "7"],
+          skippedRunningSpaceIds: [],
+        };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces(),
+        /cleanupTaskSpaces expected \{ deletedSpaceIds: number\[\], skippedRunningSpaceIds: number\[\] \}/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces rejects non-finite native IDs", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return {
+          deletedSpaceIds: [Number.NaN],
+          skippedRunningSpaceIds: [],
+        };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces(),
+        /cleanupTaskSpaces expected \{ deletedSpaceIds: number\[\], skippedRunningSpaceIds: number\[\] \}/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces reports when the native API is unavailable", async () => {
+  await withEgo({}, async () => {
+    await assert.rejects(
+      () => cleanupTaskSpaces(),
+      /cleanupTaskSpaces requires ego\.deleteSpaces/,
+    );
+  });
 });
 
 test("taskSpace returns the new object model for a resolved space", async () => {

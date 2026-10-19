@@ -11,6 +11,7 @@ test("the public API schema contains the v2 entry points and object methods", ()
   for (const name of [
     "profiles",
     "listTaskSpaces",
+    "cleanupTaskSpaces",
     "taskSpace",
     "claimTaskSpace",
     "takeOverTaskSpace",
@@ -53,6 +54,7 @@ test("the public API schema contains the v2 entry points and object methods", ()
 
 test("schema-driven option validation rejects unknown and invalid fields", () => {
   validatePublicApiOptions("taskSpace", { profileId: "Profile 2" });
+  validatePublicApiOptions("cleanupTaskSpaces", { timeout: 500 });
   validatePublicApiOptions("Page.click", {
     button: "left",
     clickCount: 2,
@@ -91,6 +93,10 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
   assert.throws(
     () => validatePublicApiOptions("taskSpace", { profileId: "" }),
     /taskSpace profileId must be a non-empty string/,
+  );
+  assert.throws(
+    () => validatePublicApiOptions("cleanupTaskSpaces", { timeout: 0 }),
+    /timeout must be a positive number of milliseconds/,
   );
   assert.throws(
     () => validatePublicApiOptions("Page.click", { trial: true }),

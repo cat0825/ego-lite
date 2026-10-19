@@ -94,6 +94,87 @@ export async function listTaskSpaces() {
 }
 
 /**
+ * Ask the browser's cleanup policy to remove non-running Agent-created task
+ * spaces. This returns the browser's receipt; it is not an inventory
+ * confirmation. Call `listTaskSpaces()` afterward and report only IDs absent
+ * from that fresh list as deleted.
+ *
+ * The native side skips spaces it considers running. This helper performs no
+ * timestamp, PID, ownership, or tab-title inference. It is an explicit bulk
+ * recovery operation, not automatic startup or task-completion cleanup, and it
+ * does not replace `task.finish({ keep: [] })` for the current task. It may
+ * remove completed results retained for review. By default this waits for the
+ * native operation to settle; pass `timeout` to bound a known-bad build.
+ * @param {{timeout?:number}} [options]
+ * @returns {Promise<{deletedSpaceIds:number[],skippedRunningSpaceIds:number[]}>}
+ */
+export async function cleanupTaskSpaces(
+  options: { timeout?: number } = {},
+): Promise<{
+  deletedSpaceIds: number[];
+  skippedRunningSpaceIds: number[];
+}> {
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.deleteSpaces !== "function") {
+    throw new Error("cleanupTaskSpaces requires ego.deleteSpaces");
+  }
+  const timeoutMs = options.timeout;
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+  ) {
+    throw new Error("cleanupTaskSpaces timeout must be a positive number");
+  }
+  let raw;
+  if (timeoutMs === undefined) {
+    raw = await invokeEgo("cleanupTaskSpaces", () =>
+      ego.deleteSpaces({ scope: "task" }),
+    );
+  } else {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `cleanupTaskSpaces timed out after ${timeoutMs}ms; deletion may still be pending. Verify with listTaskSpaces() before retrying.`,
+          ),
+        );
+      }, timeoutMs);
+    });
+    try {
+      raw = await Promise.race([
+        invokeEgo("cleanupTaskSpaces", () =>
+          ego.deleteSpaces({ scope: "task" }),
+        ),
+        timeout,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const deletedSpaceIds = raw?.deletedSpaceIds;
+  const skippedRunningSpaceIds = raw?.skippedRunningSpaceIds;
+  if (
+    !Array.isArray(deletedSpaceIds) ||
+    !deletedSpaceIds.every(
+      (id) => typeof id === "number" && Number.isFinite(id),
+    ) ||
+    !Array.isArray(skippedRunningSpaceIds) ||
+    !skippedRunningSpaceIds.every(
+      (id) => typeof id === "number" && Number.isFinite(id),
+    )
+  ) {
+    throw new Error(
+      "cleanupTaskSpaces expected { deletedSpaceIds: number[], skippedRunningSpaceIds: number[] }",
+    );
+  }
+  return {
+    deletedSpaceIds: [...deletedSpaceIds],
+    skippedRunningSpaceIds: [...skippedRunningSpaceIds],
+  };
+}
+
+/**
  * List browser profiles that may be selected when creating a task space.
  * Profile ids are stable locators; display names are not guaranteed unique.
  * @returns {Promise<Array<{id:string,name:string,isDefault:boolean}>>}
@@ -726,6 +807,7 @@ export function helperContext(
     learnContext,
     profiles,
     listTaskSpaces,
+    cleanupTaskSpaces,
     switchTaskSpace,
     newTaskSpace,
     taskSpace,
