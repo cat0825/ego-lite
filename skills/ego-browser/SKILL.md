@@ -85,6 +85,8 @@ After explicit user confirmation, to continue work from an existing user-owned, 
 
 `handOffTaskSpace` and `completeTaskSpace` resolve `{ done: true }` when the operation actually happened. Check `done` before telling the user the handoff/cleanup is finished — a `skipped` result usually means you targeted a space that was never yours.
 
+If the user explicitly asks to recover accumulated Agent task spaces in bulk, call `await taskSpaces.cleanup({ timeout: 30000 })`. This asks the browser's native cleanup policy to remove non-running Agent spaces; the helper does not infer liveness from age, ownership, process state, or tab titles. The native side returns a receipt, not proof of deletion. Call `await taskSpaces.list()` afterward and report only IDs absent from that fresh inventory as deleted. A timeout means deletion may still be pending, so verify before retrying. This may remove completed results retained for review. It is not normal task completion and does not replace `completeTaskSpace` for the current task.
+
 **`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required and defaults by policy to `false`: close the task space after completion unless there is a concrete reason to leave the live page visible.
 
 Use `{ keep: true }` only when the user explicitly asks to keep the page open, the task needs manual user action in that exact page, or the result cannot be delivered well as a URL, file, artifact, or summary. Do not keep a task space open merely because a page was visited, a document was created, or a screenshot was used for verification.

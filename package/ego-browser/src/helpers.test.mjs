@@ -5,6 +5,7 @@ import * as helperExports from "../dist/src/helpers.js";
 import { setOverrides } from "../dist/src/state.js";
 import {
   claimTaskSpace,
+  cleanupTaskSpaces,
   completeTaskSpace,
   handOffTaskSpace,
   newTaskSpace,
@@ -18,18 +19,9 @@ import {
 function withEgo(ego, fn) {
   const previous = globalThis.ego;
   globalThis.ego = ego;
-  // Disable idle reclamation so task-space helper call sequences stay
-  // deterministic; reclamation has its own suite.
-  const prevReclaimDisable = process.env.EGO_RECLAIM_DISABLE;
-  process.env.EGO_RECLAIM_DISABLE = "1";
   return Promise.resolve()
     .then(fn)
     .finally(() => {
-      if (prevReclaimDisable === undefined) {
-        delete process.env.EGO_RECLAIM_DISABLE;
-      } else {
-        process.env.EGO_RECLAIM_DISABLE = prevReclaimDisable;
-      }
       if (previous === undefined) {
         delete globalThis.ego;
       } else {
@@ -214,6 +206,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
+  assert.equal(typeof context.taskSpaces.cleanup, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
   assert.equal(typeof context.fetch.browser, "function");
@@ -231,6 +224,157 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("cleanupTaskSpaces returns the native cleanup receipt", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async deleteSpaces(options) {
+        calls.push(["deleteSpaces", options]);
+        return {
+          deletedSpaceIds: [3, 7],
+          skippedRunningSpaceIds: [11],
+        };
+      },
+    },
+    async () => {
+      assert.deepEqual(await cleanupTaskSpaces(), {
+        deletedSpaceIds: [3, 7],
+        skippedRunningSpaceIds: [11],
+      });
+    },
+  );
+  assert.deepEqual(calls, [["deleteSpaces", { scope: "task" }]]);
+});
+
+test("cleanupTaskSpaces bounds a native call that never settles", async () => {
+  await withEgo(
+    {
+      deleteSpaces() {
+        return new Promise(() => {});
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces({ timeout: 10 }),
+        /cleanupTaskSpaces timed out after 10ms; deletion may still be pending\. Verify with listTaskSpaces\(\) before retrying\./,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces validates options", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return { deletedSpaceIds: [], skippedRunningSpaceIds: [] };
+      },
+    },
+    async () => {
+      for (const timeout of [0, -1, Number.NaN, Infinity, "10"]) {
+        await assert.rejects(
+          () => cleanupTaskSpaces({ timeout }),
+          /cleanupTaskSpaces timeout must be a positive number of milliseconds/,
+        );
+      }
+      await assert.rejects(
+        () => cleanupTaskSpaces({ unknown: true }),
+        /cleanupTaskSpaces expected \{ timeout\?: number \}/,
+      );
+      await assert.rejects(
+        () => cleanupTaskSpaces(null),
+        /cleanupTaskSpaces expected \{ timeout\?: number \}/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces copies native ID arrays", async () => {
+  const receipt = {
+    deletedSpaceIds: [3],
+    skippedRunningSpaceIds: [11],
+  };
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return receipt;
+      },
+    },
+    async () => {
+      const result = await cleanupTaskSpaces();
+      result.deletedSpaceIds.push(99);
+      result.skippedRunningSpaceIds.push(98);
+    },
+  );
+  assert.deepEqual(receipt, {
+    deletedSpaceIds: [3],
+    skippedRunningSpaceIds: [11],
+  });
+});
+
+test("cleanupTaskSpaces rejects malformed receipts", async () => {
+  for (const receipt of [
+    null,
+    {},
+    { deletedSpaceIds: [3, "7"], skippedRunningSpaceIds: [] },
+    { deletedSpaceIds: [3], skippedRunningSpaceIds: [Number.NaN] },
+  ]) {
+    await withEgo(
+      {
+        async deleteSpaces() {
+          return receipt;
+        },
+      },
+      async () => {
+        await assert.rejects(
+          () => cleanupTaskSpaces(),
+          /cleanupTaskSpaces expected \{ deletedSpaceIds: number\[\], skippedRunningSpaceIds: number\[\] \}/,
+        );
+      },
+    );
+  }
+});
+
+test("cleanupTaskSpaces propagates native errors", async () => {
+  await withEgo(
+    {
+      async deleteSpaces() {
+        return { error: "The user canceled cleanup" };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces(),
+        /cleanupTaskSpaces: The user canceled cleanup/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces catches synchronous native errors", async () => {
+  await withEgo(
+    {
+      deleteSpaces() {
+        throw new Error("native cleanup unavailable");
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => cleanupTaskSpaces({ timeout: 10 }),
+        /native cleanup unavailable/,
+      );
+    },
+  );
+});
+
+test("cleanupTaskSpaces reports a missing native API", async () => {
+  await withEgo({}, async () => {
+    await assert.rejects(
+      () => cleanupTaskSpaces(),
+      /cleanupTaskSpaces requires ego\.deleteSpaces/,
+    );
+  });
 });
 
 test("page.url reads the current URL asynchronously", async () => {

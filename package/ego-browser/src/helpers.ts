@@ -23,8 +23,6 @@ import {
   siteSkillsForUrl as siteSkillsForUrlCore,
   wrapBrowserTool,
 } from "./learning/index.js";
-import { reclaimConfig, touchTaskSpace } from "./taskspace-activity.js";
-import { reclaimIdleTaskSpaces } from "./taskspace-reclaim.js";
 
 export { NAME } from "./state.js";
 export { cdp, evaluate } from "./cdp-eval.js";
@@ -116,6 +114,91 @@ export async function listTaskSpaces() {
   );
 }
 
+/**
+ * Explicitly request the browser's native bulk cleanup of non-running Agent
+ * task spaces. The browser remains authoritative: this helper does not infer
+ * liveness from age, ownership, process state, or tab titles.
+ *
+ * The returned IDs are a native receipt, not inventory confirmation. Call
+ * `listTaskSpaces()` afterward and report only IDs absent from that fresh list
+ * as deleted. Normal completion should still use `completeTaskSpace`; this is a
+ * recovery operation and may remove completed results retained for review.
+ * @param {{timeout?: number}} [options] Optional timeout in milliseconds. By default, wait for the native operation to settle.
+ * @returns {Promise<{deletedSpaceIds:number[],skippedRunningSpaceIds:number[]}>}
+ */
+export async function cleanupTaskSpaces(options: { timeout?: number } = {}) {
+  if (
+    !options ||
+    typeof options !== "object" ||
+    Array.isArray(options) ||
+    Object.keys(options).some((key) => key !== "timeout")
+  ) {
+    throw new Error("cleanupTaskSpaces expected { timeout?: number }");
+  }
+  const timeoutMs = options.timeout;
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== "number" ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0)
+  ) {
+    throw new Error(
+      "cleanupTaskSpaces timeout must be a positive number of milliseconds",
+    );
+  }
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.deleteSpaces !== "function") {
+    throw new Error("cleanupTaskSpaces requires ego.deleteSpaces");
+  }
+
+  const operation = (async () =>
+    assertNoEgoError(
+      await ego.deleteSpaces({ scope: "task" }),
+      "cleanupTaskSpaces",
+    ))();
+  let raw;
+  if (timeoutMs === undefined) {
+    raw = await operation;
+  } else {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `cleanupTaskSpaces timed out after ${timeoutMs}ms; deletion may still be pending. Verify with listTaskSpaces() before retrying.`,
+          ),
+        );
+      }, timeoutMs);
+    });
+    try {
+      raw = await Promise.race([operation, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const deletedSpaceIds = raw?.deletedSpaceIds;
+  const skippedRunningSpaceIds = raw?.skippedRunningSpaceIds;
+  if (
+    !Array.isArray(deletedSpaceIds) ||
+    !deletedSpaceIds.every(
+      (id) => typeof id === "number" && Number.isFinite(id),
+    ) ||
+    !Array.isArray(skippedRunningSpaceIds) ||
+    !skippedRunningSpaceIds.every(
+      (id) => typeof id === "number" && Number.isFinite(id),
+    )
+  ) {
+    throw new Error(
+      "cleanupTaskSpaces expected { deletedSpaceIds: number[], skippedRunningSpaceIds: number[] }",
+    );
+  }
+  return {
+    deletedSpaceIds: [...deletedSpaceIds],
+    skippedRunningSpaceIds: [...skippedRunningSpaceIds],
+  };
+}
+
 /*
  * Task space ownership policy (`ownership`: "agent" | "agentDelegatedToUser" | "user").
  * "agent" and "agentDelegatedToUser" are both agent-owned (see isAgentOwned) — the
@@ -193,11 +276,6 @@ export async function newTaskSpace(name) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
-  try {
-    await reclaimIdleTaskSpaces();
-  } catch {
-    // Idle reclamation must never block task-space use.
-  }
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
@@ -254,13 +332,6 @@ async function selectTaskSpace(ego, space, op: string) {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
   assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
-  if (isAgentOwned(space.ownership) && !reclaimConfig().disabled) {
-    try {
-      await touchTaskSpace(taskSpaceNumericId(space, op));
-    } catch {
-      // Activity tracking is best-effort; never block a select.
-    }
-  }
   return space;
 }
 
@@ -799,6 +870,7 @@ function createBrowserFacade() {
 function createTaskSpacesFacade() {
   return {
     list: listTaskSpaces,
+    cleanup: cleanupTaskSpaces,
     switch: switchTaskSpace,
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
@@ -827,7 +899,7 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.cleanup(options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

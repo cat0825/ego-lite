@@ -81,12 +81,6 @@ class FakeEgo {
 async function runTaskspaceScript(ego, code) {
   const previous = globalThis.ego;
   globalThis.ego = ego;
-  // Idle reclamation runs once per harness startup and would prepend a stray
-  // listTaskSpaces call before the script; disable it here so these e2e tests
-  // stay focused on task-space helper call sequences. Reclamation has its own
-  // dedicated suite (taskspace-reclaim.test.mjs).
-  const prevReclaimDisable = process.env.EGO_RECLAIM_DISABLE;
-  process.env.EGO_RECLAIM_DISABLE = "1";
   const stdout = captureStream();
   const stderr = captureStream();
   try {
@@ -99,11 +93,6 @@ async function runTaskspaceScript(ego, code) {
     });
     return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
   } finally {
-    if (prevReclaimDisable === undefined) {
-      delete process.env.EGO_RECLAIM_DISABLE;
-    } else {
-      process.env.EGO_RECLAIM_DISABLE = prevReclaimDisable;
-    }
     if (previous === undefined) {
       delete globalThis.ego;
     } else {
@@ -256,6 +245,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
       newType: typeof taskSpaces.new,
       switchType: typeof taskSpaces.switch,
       claimType: typeof taskSpaces.claim,
+      cleanupType: typeof taskSpaces.cleanup,
       oldNewType: typeof newTaskSpace,
       rawClaimType: typeof ego.claimTaskSpace
     }));
@@ -268,6 +258,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
     newType: "function",
     switchType: "function",
     claimType: "function",
+    cleanupType: "function",
     oldNewType: "undefined",
     rawClaimType: "function",
   });

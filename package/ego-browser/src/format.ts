@@ -656,6 +656,23 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object[]>",
     example: "console.log(await taskSpaces.list())",
   },
+  "taskSpaces.cleanup": {
+    signature:
+      "taskSpaces.cleanup(options?) => Promise<{ deletedSpaceIds: number[], skippedRunningSpaceIds: number[] }>",
+    description:
+      "Explicitly request native cleanup of non-running Agent task spaces. The browser skips spaces it considers running. The receipt is not inventory confirmation: call taskSpaces.list() afterward and report only IDs absent from that fresh list. This may remove completed results retained for review and does not replace taskSpaces.complete().",
+    params: [
+      {
+        name: "options",
+        type: "{ timeout?: number }",
+        description:
+          "Optional timeout in milliseconds for a known-bad native build. After a timeout, deletion may still be pending; verify before retrying.",
+      },
+    ],
+    returns:
+      "Promise<{ deletedSpaceIds: number[], skippedRunningSpaceIds: number[] }>",
+    example: "await taskSpaces.cleanup({ timeout: 30000 })",
+  },
   "taskSpaces.switch": {
     signature: "taskSpaces.switch(nameOrId) => Promise<object>",
     description: "Switch to an agent-owned task space.",

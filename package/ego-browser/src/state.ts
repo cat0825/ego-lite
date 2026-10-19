@@ -37,7 +37,6 @@ export const state = {
   defaultTimeout: 10000,
   // Last observed Network domain state on the default session (tracked in cdp()).
   networkDomainEnabled: false,
-  reclaimDone: false,
 };
 
 export async function send(req) {
